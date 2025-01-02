@@ -58,6 +58,7 @@ const (
 func SimulateGame(target WordleWord, words []WordleWord) {
 	eliminated := NewBitSet(len(words))
 	universe := WordleWord{allBits, allBits, allBits, allBits, allBits}
+	var solutionChars, eliminatedChars uint32
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print("Guess: ")
@@ -84,21 +85,38 @@ func SimulateGame(target WordleWord, words []WordleWord) {
 			continue
 		}
 		pattern := target.ComputePattern(guess)
-		fmt.Println(pattern)
+		for _, v := range pattern {
+			switch v.kind {
+			case PatternKindB:
+				eliminatedChars |= v.v
+			case PatternKindY, PatternKindG:
+				solutionChars |= v.v
+			}
+		}
+		fmt.Printf("Pattern %s solution charset %026b eliminated charset %026b\n", pattern, solutionChars, eliminatedChars)
 		universe = universe.Filter(pattern)
-		universe = CondenseUniverse(universe, words, eliminated)
-		fmt.Println(universe.StringMask())
+		universe = CondenseUniverse(universe, solutionChars, eliminatedChars, words, eliminated)
+		fmt.Println("universe", universe.StringMask())
 		fmt.Println(len(words)-eliminated.Size(), "possibilities")
 	}
 }
 
-func CondenseUniverse(universe WordleWord, words []WordleWord, eliminated *BitSet) WordleWord {
+func CondenseUniverse(universe WordleWord, solutionChars, eliminatedChars uint32, words []WordleWord, eliminated *BitSet) WordleWord {
 	var condensed WordleWord
 	for i, v := range words {
 		if eliminated.Contains(i) {
 			continue
 		}
 		if !universe.Match(v) {
+			eliminated.Insert(i)
+			continue
+		}
+		vc := v.CharSet()
+		if vc&solutionChars != solutionChars {
+			eliminated.Insert(i)
+			continue
+		}
+		if vc&eliminatedChars != 0 {
 			eliminated.Insert(i)
 			continue
 		}
@@ -160,6 +178,10 @@ func (w WordleWord) And(other WordleWord) WordleWord {
 
 func (w WordleWord) Match(other WordleWord) bool {
 	return w.And(other) == other
+}
+
+func (w WordleWord) CharSet() uint32 {
+	return w[0] | w[1] | w[2] | w[3] | w[4]
 }
 
 func (w WordleWord) Filter(pattern WordlePattern) WordleWord {
