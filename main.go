@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -38,7 +39,12 @@ func main() {
 		words = append(words, w)
 	}
 
-	target, err := ParseWord("mambo")
+	var targetWord string
+	flag.StringVar(&targetWord, "target", "", "target word")
+
+	flag.Parse()
+
+	target, err := ParseWord(targetWord)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -50,9 +56,11 @@ const (
 )
 
 func SimulateGame(target WordleWord, words []WordleWord) {
+	eliminated := NewBitSet(len(words))
 	universe := WordleWord{allBits, allBits, allBits, allBits, allBits}
 	reader := bufio.NewReader(os.Stdin)
 	for {
+		fmt.Print("Guess: ")
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -61,16 +69,42 @@ func SimulateGame(target WordleWord, words []WordleWord) {
 			log.Fatalln("Failed reading input")
 		}
 		line = strings.TrimSpace(line)
+		if line == "p" {
+			for i, v := range words {
+				if eliminated.Contains(i) {
+					continue
+				}
+				fmt.Println(v)
+			}
+			continue
+		}
 		guess, err := ParseWord(line)
 		if err != nil {
 			log.Println(err)
 			continue
 		}
 		pattern := target.ComputePattern(guess)
-		universe = universe.Filter(pattern)
 		fmt.Println(pattern)
+		universe = universe.Filter(pattern)
+		universe = CondenseUniverse(universe, words, eliminated)
 		fmt.Println(universe.StringMask())
+		fmt.Println(len(words)-eliminated.Size(), "possibilities")
 	}
+}
+
+func CondenseUniverse(universe WordleWord, words []WordleWord, eliminated *BitSet) WordleWord {
+	var condensed WordleWord
+	for i, v := range words {
+		if eliminated.Contains(i) {
+			continue
+		}
+		if !universe.Match(v) {
+			eliminated.Insert(i)
+			continue
+		}
+		condensed = condensed.Or(v)
+	}
+	return condensed
 }
 
 type (
@@ -92,31 +126,40 @@ const (
 	PatternKindG
 )
 
+func (w WordleWord) String() string {
+	var b strings.Builder
+	for _, v := range w {
+		b.WriteByte(byte(bits.TrailingZeros32(v)) + 'A')
+	}
+	return b.String()
+}
+
 func (w WordleWord) StringMask() string {
 	return fmt.Sprintf("%026b,%026b,%026b,%026b,%026b", w[0], w[1], w[2], w[3], w[4])
 }
 
 func (w WordleWord) Or(other WordleWord) WordleWord {
-	for i := range w {
-		w[i] |= other[i]
+	return WordleWord{
+		w[0] | other[0],
+		w[1] | other[1],
+		w[2] | other[2],
+		w[3] | other[3],
+		w[4] | other[4],
 	}
-	return w
 }
 
 func (w WordleWord) And(other WordleWord) WordleWord {
-	for i := range w {
-		w[i] &= other[i]
+	return WordleWord{
+		w[0] & other[0],
+		w[1] & other[1],
+		w[2] & other[2],
+		w[3] & other[3],
+		w[4] & other[4],
 	}
-	return w
 }
 
 func (w WordleWord) Match(other WordleWord) bool {
-	for i, v := range w {
-		if v&other[i] != other[i] {
-			return false
-		}
-	}
-	return true
+	return w.And(other) == other
 }
 
 func (w WordleWord) Filter(pattern WordlePattern) WordleWord {
@@ -143,19 +186,20 @@ func (w WordleWord) ComputePattern(other WordleWord) WordlePattern {
 	}
 	var pattern WordlePattern
 	for i, v := range w {
-		if other[i] == v {
+		c := other[i]
+		if c == v {
 			pattern[i] = WordlePatternLetter{
-				v:    v,
+				v:    c,
 				kind: PatternKindG,
 			}
-		} else if (other[i] & fullset) != 0 {
+		} else if (c & fullset) != 0 {
 			pattern[i] = WordlePatternLetter{
-				v:    v,
+				v:    c,
 				kind: PatternKindY,
 			}
 		} else {
 			pattern[i] = WordlePatternLetter{
-				v:    v,
+				v:    c,
 				kind: PatternKindB,
 			}
 		}
@@ -197,4 +241,77 @@ func ParseWord(s string) (WordleWord, error) {
 		w[i] = 1 << c
 	}
 	return w, nil
+}
+
+type (
+	BitSet struct {
+		bits []uint64
+		size int
+	}
+)
+
+func NewBitSet(size int) *BitSet {
+	return &BitSet{
+		bits: make([]uint64, (size+63)/64),
+		size: 0,
+	}
+}
+
+func (s *BitSet) Reset() {
+	for i := range s.bits {
+		s.bits[i] = 0
+	}
+	s.size = 0
+}
+
+func (s *BitSet) Size() int {
+	return s.size
+}
+
+func (s *BitSet) Contains(i int) bool {
+	a := i / 64
+	mask := uint64(1) << (i % 64)
+	return (s.bits[a] & mask) != 0
+}
+
+func (s *BitSet) Set(i int, b bool) bool {
+	a := i / 64
+	mask := uint64(1) << (i % 64)
+	if b {
+		diff := (s.bits[a] & mask) == 0
+		s.bits[a] |= mask
+		if diff {
+			s.size++
+		}
+		return diff
+	} else {
+		diff := (s.bits[a] & mask) != 0
+		s.bits[a] &^= mask
+		if diff {
+			s.size--
+		}
+		return diff
+	}
+}
+
+func (s *BitSet) Insert(i int) bool {
+	a := i / 64
+	mask := uint64(1) << (i % 64)
+	diff := (s.bits[a] & mask) == 0
+	s.bits[a] |= mask
+	if diff {
+		s.size++
+	}
+	return diff
+}
+
+func (s *BitSet) Remove(i int) bool {
+	a := i / 64
+	mask := uint64(1) << (i % 64)
+	diff := (s.bits[a] & mask) != 0
+	s.bits[a] &^= mask
+	if diff {
+		s.size--
+	}
+	return diff
 }
