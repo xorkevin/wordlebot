@@ -57,8 +57,9 @@ const (
 
 func SimulateGame(target WordleWord, words []WordleWord) {
 	eliminated := NewBitSet(len(words))
-	universe := WordleWord{allBits, allBits, allBits, allBits, allBits}
-	var solutionChars, eliminatedChars uint32
+	universe := Universe{
+		bitMask: WordleWord{allBits, allBits, allBits, allBits, allBits},
+	}
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print("Guess: ")
@@ -84,45 +85,69 @@ func SimulateGame(target WordleWord, words []WordleWord) {
 			log.Println(err)
 			continue
 		}
-		pattern := target.ComputePattern(guess)
-		for _, v := range pattern {
-			switch v.kind {
-			case PatternKindB:
-				eliminatedChars |= v.v
-			case PatternKindY, PatternKindG:
-				solutionChars |= v.v
+		universe = CondenseUniverse(guess, target, universe, words, eliminated)
+		fmt.Printf("Pattern %s solution charset %026b eliminated charset %026b\n", target.ComputePattern(guess), universe.solutionChars, universe.eliminatedChars)
+		fmt.Println("universe", universe.bitMask.StringMask())
+		numPossibilities := len(words) - eliminated.Size()
+		fmt.Println(numPossibilities, "possibilities")
+		if numPossibilities < 2 {
+			for i, v := range words {
+				if !eliminated.Contains(i) {
+					fmt.Println(v)
+					break
+				}
 			}
+			break
 		}
-		fmt.Printf("Pattern %s solution charset %026b eliminated charset %026b\n", pattern, solutionChars, eliminatedChars)
-		universe = universe.Filter(pattern)
-		universe = CondenseUniverse(universe, solutionChars, eliminatedChars, words, eliminated)
-		fmt.Println("universe", universe.StringMask())
-		fmt.Println(len(words)-eliminated.Size(), "possibilities")
 	}
 }
 
-func CondenseUniverse(universe WordleWord, solutionChars, eliminatedChars uint32, words []WordleWord, eliminated *BitSet) WordleWord {
+type (
+	Universe struct {
+		bitMask                        WordleWord
+		solutionChars, eliminatedChars uint32
+	}
+)
+
+func CondenseUniverse(guess, target WordleWord, universe Universe, words []WordleWord, eliminated *BitSet) Universe {
+	pattern := target.ComputePattern(guess)
+	for _, v := range pattern {
+		switch v.kind {
+		case PatternKindB:
+			universe.eliminatedChars |= v.v
+		case PatternKindY, PatternKindG:
+			universe.solutionChars |= v.v
+		}
+	}
+	universe.bitMask = universe.bitMask.Filter(pattern)
 	var condensed WordleWord
 	for i, v := range words {
-		if eliminated.Contains(i) {
+		if eliminated != nil && eliminated.Contains(i) {
 			continue
 		}
-		if !universe.Match(v) {
-			eliminated.Insert(i)
+		if !universe.bitMask.Match(v) {
+			if eliminated != nil {
+				eliminated.Insert(i)
+			}
 			continue
 		}
 		vc := v.CharSet()
-		if vc&solutionChars != solutionChars {
-			eliminated.Insert(i)
+		if vc&universe.solutionChars != universe.solutionChars {
+			if eliminated != nil {
+				eliminated.Insert(i)
+			}
 			continue
 		}
-		if vc&eliminatedChars != 0 {
-			eliminated.Insert(i)
+		if vc&universe.eliminatedChars != 0 {
+			if eliminated != nil {
+				eliminated.Insert(i)
+			}
 			continue
 		}
 		condensed = condensed.Or(v)
 	}
-	return condensed
+	universe.bitMask = condensed
+	return universe
 }
 
 type (
