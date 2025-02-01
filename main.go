@@ -56,10 +56,10 @@ const (
 )
 
 func SimulateGame(target WordleWord, words []WordleWord) {
-	eliminated := NewBitSet(len(words))
 	universe := Universe{
 		bitMask: WordleWord{allBits, allBits, allBits, allBits, allBits},
 	}
+	numPossibilities := len(words)
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print("Guess: ")
@@ -72,11 +72,10 @@ func SimulateGame(target WordleWord, words []WordleWord) {
 		}
 		line = strings.TrimSpace(line)
 		if line == "p" {
-			for i, v := range words {
-				if eliminated.Contains(i) {
-					continue
+			for _, v := range words {
+				if universe.Contains(v) {
+					fmt.Println(v)
 				}
-				fmt.Println(v)
 			}
 			continue
 		}
@@ -85,14 +84,13 @@ func SimulateGame(target WordleWord, words []WordleWord) {
 			log.Println(err)
 			continue
 		}
-		universe = CondenseUniverse(guess, target, universe, words, eliminated)
+		universe, numPossibilities = CondenseUniverse(guess, target, universe, words)
 		fmt.Printf("Pattern %s solution charset %026b eliminated charset %026b\n", target.ComputePattern(guess), universe.solutionChars, universe.eliminatedChars)
 		fmt.Println("universe", universe.bitMask.StringMask())
-		numPossibilities := len(words) - eliminated.Size()
 		fmt.Println(numPossibilities, "possibilities")
 		if numPossibilities < 2 {
-			for i, v := range words {
-				if !eliminated.Contains(i) {
+			for _, v := range words {
+				if universe.Contains(v) {
 					fmt.Println(v)
 					break
 				}
@@ -109,7 +107,7 @@ type (
 	}
 )
 
-func CondenseUniverse(guess, target WordleWord, universe Universe, words []WordleWord, eliminated *BitSet) Universe {
+func CondenseUniverse(guess, target WordleWord, universe Universe, words []WordleWord) (Universe, int) {
 	pattern := target.ComputePattern(guess)
 	for _, v := range pattern {
 		switch v.kind {
@@ -120,34 +118,21 @@ func CondenseUniverse(guess, target WordleWord, universe Universe, words []Wordl
 		}
 	}
 	universe.bitMask = universe.bitMask.Filter(pattern)
+	count := 0
 	var condensed WordleWord
-	for i, v := range words {
-		if eliminated != nil && eliminated.Contains(i) {
-			continue
+	for _, v := range words {
+		if universe.Contains(v) {
+			condensed = condensed.Or(v)
+			count++
 		}
-		if !universe.bitMask.Match(v) {
-			if eliminated != nil {
-				eliminated.Insert(i)
-			}
-			continue
-		}
-		vc := v.CharSet()
-		if vc&universe.solutionChars != universe.solutionChars {
-			if eliminated != nil {
-				eliminated.Insert(i)
-			}
-			continue
-		}
-		if vc&universe.eliminatedChars != 0 {
-			if eliminated != nil {
-				eliminated.Insert(i)
-			}
-			continue
-		}
-		condensed = condensed.Or(v)
 	}
 	universe.bitMask = condensed
-	return universe
+	return universe, count
+}
+
+func (u Universe) Contains(v WordleWord) bool {
+	vc := v.CharSet()
+	return u.bitMask.Match(v) && vc&u.solutionChars == u.solutionChars && vc&u.eliminatedChars == 0
 }
 
 type (
