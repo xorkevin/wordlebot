@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/bits"
 	"os"
 	"strings"
@@ -41,9 +42,22 @@ func main() {
 
 	var targetWord string
 	flag.StringVar(&targetWord, "target", "", "target word")
+	var infoGainTarget string
+	flag.StringVar(&infoGainTarget, "calc-info-gain", "", "calculate information gain for a guess")
 
 	flag.Parse()
 
+	if infoGainTarget != "" {
+		target, err := ParseWord(infoGainTarget)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		universe := Universe{
+			bitMask: WordleWord{allBits, allBits, allBits, allBits, allBits},
+		}
+		fmt.Println(CalcExpectedInformationGain(target, universe, words))
+		return
+	}
 	target, err := ParseWord(targetWord)
 	if err != nil {
 		log.Fatalln(err)
@@ -98,6 +112,30 @@ func SimulateGame(target WordleWord, words []WordleWord) {
 			break
 		}
 	}
+}
+
+func CalcExpectedInformationGain(guess WordleWord, universe Universe, words []WordleWord) float64 {
+	universeSize := 0
+	var avgEndEntropy float64
+	for _, v := range words {
+		if !universe.Contains(v) {
+			continue
+		}
+		_, count := CondenseUniverse(guess, v, universe, words)
+		entropy := calcEntropy(count)
+		incrSize := float64(universeSize + 1)
+		avgEndEntropy = avgEndEntropy*(float64(universeSize)/incrSize) + entropy/incrSize
+		universeSize++
+	}
+	if universeSize == 0 {
+		return -1
+	}
+	// information gain is entropy start state - entropy of end state
+	return calcEntropy(universeSize) - avgEndEntropy
+}
+
+func calcEntropy(count int) float64 {
+	return math.Log2(float64(count))
 }
 
 type (
